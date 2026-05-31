@@ -85,8 +85,6 @@ def load_models():
     models = {}
     
     if not MONGO_URI:
-        st.warning("⚠️ MONGODB_URI not set. Checking for local models...")
-        # Try local fallback
         for day in [1, 2, 3]:
             local = f"models/model_day_{day}.pkl"
             if os.path.exists(local):
@@ -105,25 +103,19 @@ def load_models():
             grid_out = fs.find_one({"filename": f"model_day_{day}"})
             if grid_out:
                 models[day] = pickle.loads(grid_out.read())
-                st.success(f"✅ Loaded Day+{day} model from MongoDB GridFS")
             else:
                 local = f"models/model_day_{day}.pkl"
                 if os.path.exists(local):
                     with open(local, "rb") as f:
                         models[day] = pickle.load(f)
-                    st.info(f"ℹ️ Loaded Day+{day} model from local file")
 
         client.close()
-    except pymongo_errors.ServerSelectionTimeoutError as e:
-        st.error(f"❌ Cannot connect to MongoDB: {e}")
-        st.info("Loading local model fallbacks if available...")
+    except Exception:
         for day in [1, 2, 3]:
             local = f"models/model_day_{day}.pkl"
             if os.path.exists(local):
                 with open(local, "rb") as f:
                     models[day] = pickle.load(f)
-    except Exception as e:
-        st.error(f"❌ Error loading models: {e}")
 
     return models
 
@@ -131,7 +123,6 @@ def load_models():
 @st.cache_data(ttl=3600)
 def load_recent_features():
     if not MONGO_URI:
-        st.warning("⚠️ MONGODB_URI not set. No data available.")
         return pd.DataFrame()
 
     try:
@@ -144,18 +135,12 @@ def load_recent_features():
         client.close()
         
         if not docs:
-            st.warning("⚠️ No data found in MongoDB for the last 7 days.")
             return pd.DataFrame()
             
         df = pd.DataFrame(docs)
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         return df.sort_values("timestamp").reset_index(drop=True)
-    except pymongo_errors.ServerSelectionTimeoutError as e:
-        st.error(f"❌ Cannot connect to MongoDB: {e}")
-        st.info("Please check: 1) MongoDB Atlas IP whitelist, 2) Streamlit Cloud secrets")
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"❌ Error loading features: {e}")
+    except Exception:
         return pd.DataFrame()
 
 
@@ -165,8 +150,8 @@ def load_metrics():
         try:
             with open("models/metrics.json") as f:
                 return json.load(f)
-        except Exception as e:
-            st.warning(f"Could not load metrics.json: {e}")
+        except Exception:
+            pass
     return {}
 
 
@@ -177,7 +162,6 @@ def make_predictions(df: pd.DataFrame, models: dict) -> dict:
 
     valid_rows = df[FEATURE_COLS].dropna()
     if valid_rows.empty:
-        st.warning("⚠️ No valid feature rows found for prediction.")
         return {}
 
     X = valid_rows.iloc[-1].values.reshape(1, -1)
@@ -194,8 +178,8 @@ def make_predictions(df: pd.DataFrame, models: dict) -> dict:
                 "color":    get_aqi_color(pred_aqi),
                 "bg":       get_aqi_bg_color(pred_aqi),
             }
-        except Exception as e:
-            st.warning(f"Prediction failed for Day+{day}: {e}")
+        except Exception:
+            pass
 
     return predictions
 
@@ -238,20 +222,10 @@ st.markdown("""
 st.title(f"🌬️ AQI Predictor — {CITY}")
 st.caption(f"Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
 
-# Load data with error handling
-with st.spinner("Loading models and data..."):
+with st.spinner("Loading..."):
     models = load_models()
     df = load_recent_features()
     metrics = load_metrics()
-
-# Debug info (remove in production)
-with st.expander("🔧 Debug Info"):
-    st.write(f"MONGO_URI set: {bool(MONGO_URI)}")
-    st.write(f"Models loaded: {list(models.keys())}")
-    st.write(f"Data rows: {len(df)}")
-    if not df.empty:
-        st.write(f"Date range: {df['timestamp'].min()} to {df['timestamp'].max()}")
-        st.write(f"Columns: {list(df.columns)}")
 
 # ── Current AQI ────────────────────────────────────────────────────────────────
 
@@ -281,10 +255,6 @@ if not df.empty and "aqi" in df.columns:
                 f"⚠️ **Air quality alert!** AQI is {current_aqi} ({current_category}). "
                 "Limit outdoor activity and wear a mask if going outside."
             )
-    else:
-        st.warning("⚠️ AQI column exists but has no valid values.")
-else:
-    st.warning("⚠️ No current AQI data available. Run the feature pipeline to populate data.")
 
 # ── 3-Day Forecast ─────────────────────────────────────────────────────────────
 
@@ -304,84 +274,6 @@ if preds:
                 <p style='margin:0;font-size:13px;color:{info["color"]};font-weight:500'>{info["category"]}</p>
             </div>
             """, unsafe_allow_html=True)
-else:
-    st.warning("No predictions available. Ensure models are trained and data is loaded.")
-
-# ── Historical AQI chart ───────────────────────────────────────────────────────
-
-st.subheader("📈 AQI — Last 7 Days")
-
-if not df.empty and "aqi" in df.columns and "timestamp" in df.columns:
-    try:
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df["timestamp"], y=df["aqi"],
-            mode="lines+markers", name="AQI",
-            line=dict(color="#4f8ef7", width=2),
-            marker=dict(size=3),
-        ))
-        # 24h rolling mean
-        if len(df) >= 24:
-            df["aqi_rolling_24h"] = df["aqi"].rolling(24, min_periods=1).mean()
-            fig.add_trace(go.Scatter(
-                x=df["timestamp"], y=df["aqi_rolling_24h"],
-                mode="lines", name="24h Rolling Mean",
-                line=dict(color="#ef4444", width=2),
-            ))
-        thresholds = [
-            (100, "#cccc00", "Moderate"),
-            (150, "#ff7e00", "Unhealthy"),
-            (200, "#ff0000", "Very Unhealthy"),
-        ]
-        for val, color, label in thresholds:
-            fig.add_hline(
-                y=val, line_dash="dot", line_color=color,
-                annotation_text=label, annotation_position="right",
-                annotation_font_color=color,
-            )
-        fig.update_layout(
-            height=350, margin=dict(l=0, r=0, t=10, b=0),
-            xaxis_title="Time", yaxis_title="AQI",
-            plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
-            font=dict(color="#e2e8f0"),
-            xaxis=dict(gridcolor="#1e2330"),
-            yaxis=dict(gridcolor="#1e2330"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(color="#e2e8f0")),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    except Exception as e:
-        st.error(f"Error rendering AQI chart: {e}")
-else:
-    st.info("No historical AQI data available. Run the feature pipeline to fetch data.")
-
-# ── Pollutant breakdown ────────────────────────────────────────────────────────
-
-st.subheader("🔬 Pollutant Levels (Last 7 Days)")
-
-if not df.empty:
-    available = [c for c in ["pm2_5", "pm10", "nitrogen_dioxide", "ozone"] if c in df.columns]
-    if available and "timestamp" in df.columns:
-        try:
-            fig2 = px.line(
-                df, x="timestamp", y=available,
-                labels={"value": "µg/m³", "variable": "Pollutant"},
-                color_discrete_sequence=px.colors.qualitative.Set2,
-            )
-            fig2.update_layout(
-                height=300, margin=dict(l=0, r=0, t=10, b=0),
-                plot_bgcolor="#0e1117", paper_bgcolor="#0e1117",
-                font=dict(color="#e2e8f0"),
-                xaxis=dict(gridcolor="#1e2330"),
-                yaxis=dict(gridcolor="#1e2330"),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(color="#e2e8f0")),
-            )
-            st.plotly_chart(fig2, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error rendering pollutant chart: {e}")
-    else:
-        st.info("No pollutant data columns found in the dataset.")
-else:
-    st.info("No data available for pollutant breakdown.")
 
 # ── Weather conditions ────────────────────────────────────────────────────────
 
@@ -390,7 +282,6 @@ st.subheader("🌤️ Current Weather Conditions")
 if not df.empty:
     latest = df.iloc[-1]
     
-    # Fix visibility unit: Open-Meteo returns meters, convert to km
     visibility_val = latest.get('visibility', 'N/A')
     if pd.notna(visibility_val) and isinstance(visibility_val, (int, float)):
         visibility_km = visibility_val / 1000
@@ -412,8 +303,6 @@ if not df.empty:
     for i, (label, value) in enumerate(weather_metrics):
         with wcols[i % 4]:
             st.metric(label, value)
-else:
-    st.warning("No weather data available.")
 
 # ── Model performance ──────────────────────────────────────────────────────────
 
@@ -434,7 +323,6 @@ if metrics:
         perf_df = pd.DataFrame(rows)
         st.dataframe(perf_df, use_container_width=True, hide_index=True)
 
-        # Model comparison bar chart per horizon
         st.subheader("🔍 Model Comparison by Horizon")
         for horizon, m in metrics.items():
             if "all_models" in m and m["all_models"]:
@@ -457,12 +345,10 @@ if metrics:
                         yaxis=dict(gridcolor="#1e2330"),
                     )
                     st.plotly_chart(fig_comp, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Error rendering model comparison for {horizon}: {e}")
-    except Exception as e:
-        st.error(f"Error displaying metrics: {e}")
-else:
-    st.info("Run the training pipeline to populate metrics.")
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 # ── AQI guide ─────────────────────────────────────────────────────────────────
 
