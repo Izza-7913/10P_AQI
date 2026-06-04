@@ -8,6 +8,7 @@ Runs every hour via GitHub Actions.
 """
 
 import os
+import time
 import requests
 import pandas as pd
 import numpy as np
@@ -22,6 +23,9 @@ LAT        = float(os.getenv("CITY_LAT", 24.8607))
 LON        = float(os.getenv("CITY_LON", 67.0011))
 CITY       = os.getenv("CITY_NAME", "Karachi")
 
+MAX_RETRIES = 3
+TIMEOUT_SECONDS = 30
+
 
 def fetch_current_data(lat: float, lon: float) -> dict:
     """Fetch latest hourly data from Open-Meteo air quality + weather APIs."""
@@ -33,8 +37,6 @@ def fetch_current_data(lat: float, lon: float) -> dict:
         "hourly": "pm2_5,pm10,nitrogen_dioxide,ozone",
         "timezone": "auto", "past_days": 1, "forecast_days": 1,
     }
-    aq_resp = requests.get(aq_url, params=aq_params, timeout=10).json()
-
     # Weather API
     wx_url = "https://api.open-meteo.com/v1/forecast"
     wx_params = {
@@ -43,9 +45,27 @@ def fetch_current_data(lat: float, lon: float) -> dict:
                   "surface_pressure,cloud_cover,visibility,wind_direction_10m",
         "timezone": "auto", "past_days": 1, "forecast_days": 1,
     }
-    wx_resp = requests.get(wx_url, params=wx_params, timeout=10).json()
 
-    return {"air_quality": aq_resp, "weather": wx_resp}
+    # Retry with exponential backoff
+    for attempt in range(MAX_RETRIES):
+        try:
+            aq_resp = requests.get(aq_url, params=aq_params, timeout=TIMEOUT_SECONDS).json()
+            wx_resp = requests.get(wx_url, params=wx_params, timeout=TIMEOUT_SECONDS).json()
+            return {"air_quality": aq_resp, "weather": wx_resp}
+        except requests.exceptions.ReadTimeout:
+            if attempt < MAX_RETRIES - 1:
+                wait = 2 ** attempt  # 1s, 2s, 4s
+                print(f"[Feature Pipeline] Open-Meteo timeout (attempt {attempt + 1}/{MAX_RETRIES}), retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
+        except requests.exceptions.RequestException as e:
+            if attempt < MAX_RETRIES - 1:
+                wait = 2 ** attempt
+                print(f"[Feature Pipeline] Open-Meteo error: {e} (attempt {attempt + 1}/{MAX_RETRIES}), retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
 
 
 def parse_to_dataframe(raw: dict) -> pd.DataFrame:
@@ -73,13 +93,13 @@ def parse_to_dataframe(raw: dict) -> pd.DataFrame:
         "wind_direction_10m":     wx.get("wind_direction_10m", [0]*len(wx["time"])),
     })
 
-    # Merge on timestamp so mismatched lengths don't crash
+    # Merge on timestamp so mismatched lengths don\'t crash
     df = pd.merge(df_aq, df_wx, on="timestamp", how="inner")
     return df.dropna(subset=["pm2_5"])
 
 
 def pm25_to_aqi(pm25: float) -> float:
-    """Converts PM2.5 concentration (µg/m³) to US AQI."""
+    """Converts PM2.5 concentration (\u03bcg/m\u00b3) to US AQI."""
     breakpoints = [
         (0.0,   12.0,   0,   50),
         (12.1,  35.4,  51,  100),
