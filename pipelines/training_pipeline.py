@@ -7,6 +7,7 @@ Candidates: Random Forest, Gradient Boosting, XGBoost, LightGBM, CatBoost,
             Ridge, Lasso, Elastic Net, Extra Trees.
 Uses TimeSeriesSplit CV for stable model selection.
 Logs to DagsHub (MLflow) if available. Saves best models to MongoDB GridFS + local pkl.
+Saves metrics to MongoDB for Streamlit Cloud access.
 """
 
 import os
@@ -82,6 +83,22 @@ def save_model_to_mongodb(model, day_ahead: int):
     fs.put(pickle.dumps(model), filename=f"model_day_{day_ahead}", city=CITY)
     client.close()
     print(f"  Saved model_day_{day_ahead} to MongoDB GridFS")
+
+
+def save_metrics_to_mongodb(metrics_summary: dict):
+    """Save metrics to MongoDB so Streamlit Cloud can access them."""
+    client = MongoClient(MONGO_URI)
+    db = client["aqi_db"]
+    col = db["metrics"]
+    from datetime import datetime
+    doc = {
+        "city": CITY,
+        "timestamp": datetime.utcnow(),
+        "metrics": metrics_summary,
+    }
+    col.replace_one({"city": CITY}, doc, upsert=True)
+    client.close()
+    print("  Metrics saved to MongoDB")
 
 
 # --- Candidate model factory ---
@@ -322,6 +339,9 @@ def run():
 
     with open("models/metrics.json", "w") as f:
         json.dump(metrics_summary, f, indent=2)
+
+    # Save to MongoDB for Streamlit Cloud access
+    save_metrics_to_mongodb(metrics_summary)
 
     print(f"\n{'='*60}")
     print("Training complete.")

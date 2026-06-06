@@ -3,6 +3,7 @@ AQI Predictor Dashboard — Merged Edition
 Models loaded from MongoDB GridFS (works locally AND on Streamlit Cloud).
 Features: Dual API data, per-day-ahead models, ensemble predictions,
           model comparison, SHAP explainability, dark theme.
+Metrics loaded from MongoDB (fallback to local file).
 """
 
 import os
@@ -115,8 +116,21 @@ def load_recent_features():
     return df.sort_values("timestamp").reset_index(drop=True)
 
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=3600)
 def load_metrics():
+    """Load metrics from MongoDB first, fallback to local file."""
+    # Try MongoDB first
+    try:
+        client = MongoClient(MONGO_URI)
+        col = client["aqi_db"]["metrics"]
+        doc = col.find_one({"city": CITY})
+        client.close()
+        if doc and "metrics" in doc:
+            return doc["metrics"]
+    except Exception:
+        pass
+
+    # Fallback to local file
     if os.path.exists("models/metrics.json"):
         with open("models/metrics.json") as f:
             return json.load(f)
@@ -311,7 +325,7 @@ st.subheader("🌤️ Current Weather Conditions")
 if not df.empty:
     latest = df.iloc[-1]
     wcols = st.columns(4)
-    
+
     # Fix visibility: Open-Meteo returns meters, convert to km
     visibility_raw = latest.get('visibility')
     if pd.notna(visibility_raw):
@@ -319,7 +333,7 @@ if not df.empty:
         visibility_str = f"{visibility_km:.1f} km"
     else:
         visibility_str = "N/A"
-    
+
     weather_metrics = [
         ("🌡️ Temperature", f"{latest.get('temperature_2m', 'N/A')}°C"),
         ("💧 Humidity", f"{latest.get('relative_humidity_2m', 'N/A')}%"),
