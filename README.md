@@ -15,7 +15,7 @@
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Project Overview](#project-overview)
 - [System Architecture](#system-architecture)
@@ -43,7 +43,7 @@
 
 ---
 
-## 🎯 Project Overview
+## Project Overview
 
 **Pearls AQI Predictor** is a fully serverless, end-to-end machine learning system designed to forecast the Air Quality Index (AQI) for **Karachi, Pakistan** (extensible to any city) over a **3-day horizon**. The system leverages a dual-API approach — fetching both meteorological data and air quality pollutant measurements — to build a rich feature set that captures temporal patterns, pollutant interactions, and weather-driven dynamics.
 
@@ -64,7 +64,7 @@
 
 ---
 
-## 🏗️ System Architecture
+## System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -132,7 +132,7 @@ Raw Data --> Feature Generation --> Feature Store --> Model Training --> Model R
 
 ---
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 ### Core Framework
 | Layer | Technology | Purpose |
@@ -247,7 +247,7 @@ Raw Data --> Feature Generation --> Feature Store --> Model Training --> Model R
 
 ---
 
-## 📋 Prerequisites
+## Prerequisites
 
 Before starting, ensure you have:
 
